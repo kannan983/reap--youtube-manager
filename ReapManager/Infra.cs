@@ -63,7 +63,8 @@ public class Settings
 {
     public string Language { get; set; } = "English";
     public string Theme { get; set; } = "System";
-    public string? AuthFolder { get; set; }
+    /// Language name -> that channel's auth folder (one folder per language).
+    public Dictionary<string, string> AuthFolders { get; set; } = new();
     public bool AutoSignIn { get; set; } = true;
     public bool VerboseLog { get; set; }
 

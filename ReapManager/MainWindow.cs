@@ -22,6 +22,11 @@ using Ellipse = Avalonia.Controls.Shapes.Ellipse;
 
 namespace ReapManager;
 
+public record FolderEntry(string Language, string Path)
+{
+    public override string ToString() => $"{Language}  -  {Path}";
+}
+
 public record PlaylistInfo(string Id, string Title, string Description, long VideoCount);
 
 public class RenameRow
@@ -51,22 +56,24 @@ public class MainWindow : Window
     readonly Dictionary<string, PlaylistInfo> _playlists = new();
     List<ExcelRow>? _excelRows;
     List<RenameRow> _renameRows = new();
-    bool _signedIn;
+    bool _signedIn, _switching;
+    string? _channelTitle;
 
     // header + status
     readonly TextBlock _langBadgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.Bold };
+    readonly TextBlock _headerChannel = new() { Foreground = Brushes.White, FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
     readonly ComboBox _themeCombo = new() { ItemsSource = new[] { "System", "Light", "Dark" }, MinWidth = 110 };
     readonly Ellipse _led = new() { Width = 14, Height = 14, Stroke = Brushes.DimGray, StrokeThickness = 1, Margin = new Thickness(0, 0, 8, 0) };
     readonly TextBlock _statusText = new() { Text = "Welcome!", VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     readonly TextBlock _statusLang = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold, Margin = new Thickness(12, 0, 0, 0) };
     // tab 1
     readonly ComboBox _langCombo = new() { ItemsSource = LanguageNames, MinWidth = 160 };
-    readonly TextBox _folderBox = new() { IsReadOnly = true, Watermark = "Pick the folder that has oauth_client.json and api.txt" };
+    readonly ComboBox _folderCombo = new() { HorizontalAlignment = HorizontalAlignment.Stretch, PlaceholderText = "No folder saved for this language yet - click Browse..." };
     readonly Button _browseBtn = new() { Content = "Browse..." };
     readonly Button _tokenBtn = new() { Content = "Authorize with Token", IsEnabled = false };
     readonly Button _browserBtn = new() { Content = "Authorize (Browser)", IsEnabled = false };
     readonly Button _abortBtn = new() { Content = "Sign out / Reset", IsEnabled = false };
-    readonly CheckBox _autoSignIn = new() { Content = "Sign in automatically with the saved token when the app starts" };
+    readonly CheckBox _autoSignIn = new() { Content = "Sign in automatically with the saved token (at start and when switching language)" };
     readonly TextBlock _authStatus = new() { Text = "Status: Awaiting folder.", FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap };
     readonly TextBlock _tokenInfo = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 };
     // tab 2
@@ -102,11 +109,18 @@ public class MainWindow : Window
         _verbose.IsChecked = _settings.VerboseLog;
         UpdateLanguageDisplay();
 
-        _langCombo.SelectionChanged += (_, _) =>
+        _langCombo.SelectionChanged += async (_, _) =>
         {
-            _settings.Language = (string)_langCombo.SelectedItem!; _settings.Save();
-            Log.Info($"Channel language set to {_settings.Language}.");
-            UpdateLanguageDisplay();
+            if (_switching || _langCombo.SelectedItem is not string lang || lang == _settings.Language) return;
+            _settings.Language = lang; _settings.Save();
+            Log.Info($"Channel language set to {lang}.");
+            await SwitchToLanguage(lang, autoSignIn: true);
+        };
+        _folderCombo.SelectionChanged += (_, _) =>
+        {
+            // picking another language's folder from the history = switch to that language
+            if (!_switching && _folderCombo.SelectedItem is FolderEntry f && f.Language != _settings.Language)
+                _langCombo.SelectedItem = f.Language;
         };
         _themeCombo.SelectionChanged += (_, _) =>
         {
@@ -142,6 +156,7 @@ public class MainWindow : Window
                     {
                         new TabItem { Header = "1. Authentication", Content = BuildAuthTab() },
                         _tab2, _tab3,
+                        new TabItem { Header = "Help", Content = BuildHelpTab() },
                         new TabItem { Header = "Log", Content = BuildLogTab() },
                         new TabItem { Header = "About", Content = BuildAboutTab() },
                     }
@@ -168,6 +183,7 @@ public class MainWindow : Window
             {
                 new TextBlock { Text = AppInfo.Name, FontSize = 20, FontWeight = FontWeight.Bold, Foreground = Brushes.White },
                 new TextBlock { Text = "Rename videos and export playlists to Excel for REAP YouTube channels", FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#D0E4F5")), TextWrapping = TextWrapping.Wrap },
+                _headerChannel,
             }
         };
         var g = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
@@ -193,22 +209,14 @@ public class MainWindow : Window
             Children =
             {
                 Wrap(new TextBlock { Text = "Channel Language:", VerticalAlignment = VerticalAlignment.Center }, _langCombo,
-                     new TextBlock { Text = "(auto-picked from the folder name when possible)", Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center }),
-                Grid3("Auth Folder:", _folderBox, _browseBtn),
+                     new TextBlock { Text = "Each language has its own auth folder and YouTube channel.", Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center }),
+                Grid3("Auth Folder:", _folderCombo, _browseBtn),
+                new TextBlock { Text = "The list remembers every folder you have used, with its language. Picking one switches to that language.", Opacity = 0.7, TextWrapping = TextWrapping.Wrap },
                 Wrap(_tokenBtn, _browserBtn, _abortBtn),
                 _autoSignIn,
                 _authStatus,
                 _tokenInfo,
-                Panel("How to sign in",
-                    "1. Pick the Channel Language (the orange badge at the top always shows it).\n" +
-                    "2. Browse to the auth folder for that channel. It must contain oauth_client.json and api.txt.\n" +
-                    "3. First time: click 'Authorize (Browser)' and log in with the channel's Google account.\n" +
-                    "4. After that: 'Authorize with Token' reuses the saved login (token.json from the old app also works).\n" +
-                    "5. The light in the bottom-left turns green when you are signed in."),
-                Panel("If the saved token stops working",
-                    "Click 'Authorize (Browser)' to log in again.\n" +
-                    "If this happens about every 7 days, the Google Cloud OAuth app is in 'Testing' mode. Fix once in Google Cloud Console:\n" +
-                    "APIs & Services > OAuth consent screen > Publish app > 'In production'."),
+                Panel("New here?", "Open the Help tab for the full step-by-step guide (first-time setup for all 12 languages, everyday use, and fixing problems)."),
             }
         }
     };
@@ -236,6 +244,14 @@ public class MainWindow : Window
             _excelGrid
         }
     };
+
+    static Control BuildHelpTab()
+    {
+        var p = new StackPanel { Margin = new Thickness(12), Spacing = 12, MaxWidth = 900, HorizontalAlignment = HorizontalAlignment.Left };
+        p.Children.Add(new TextBlock { Text = "How to use REAP YouTube Manager", FontSize = 20, FontWeight = FontWeight.Bold });
+        foreach (var (title, body) in HelpText.Sections) p.Children.Add(Panel(title, body));
+        return new ScrollViewer { Content = p };
+    }
 
     Control BuildLogTab()
     {
@@ -372,9 +388,12 @@ public class MainWindow : Window
     void UpdateLanguageDisplay()
     {
         var lang = _settings.Language;
+        var folder = _authFolder == null ? "not set" : System.IO.Path.GetFileName(_authFolder.TrimEnd('/', '\\'));
+        var channel = _channelTitle ?? "not signed in";
         Title = $"{AppInfo.Name} - {lang} channel";
         _langBadgeText.Text = $"Language: {lang} ({Core.LanguageCode(lang)})";
-        _statusLang.Text = $"Channel: {lang}";
+        _headerChannel.Text = $"Auth folder: {folder}     YouTube channel: {channel}";
+        _statusLang.Text = $"{lang}  |  {channel}";
     }
 
     void Status(string s) => _statusText.Text = s;
@@ -423,36 +442,57 @@ public class MainWindow : Window
     }
 
     // ================= tab 1: auth =================
-    async Task RestoreLastSession()
+    Task RestoreLastSession() => SwitchToLanguage(_settings.Language, autoSignIn: true);
+
+    /// Load the saved auth folder for a language (signing out of the previous channel first).
+    async Task SwitchToLanguage(string lang, bool autoSignIn)
     {
-        if (_settings.AuthFolder == null) return;
-        if (!Directory.Exists(_settings.AuthFolder)) { Log.Warn($"Saved auth folder no longer exists: {_settings.AuthFolder}"); return; }
-        Log.Info($"Restoring last auth folder: {_settings.AuthFolder}");
-        SetAuthFolder(_settings.AuthFolder);
-        if (_settings.AutoSignIn && _tokenBtn.IsEnabled) await StartAuth(browser: false);
+        _authCts?.Cancel();
+        if (_signedIn) SetAuthState(false, $"Switched to {lang}.");
+        _authFolder = _settings.AuthFolders.GetValueOrDefault(lang);
+        if (_authFolder != null && !Directory.Exists(_authFolder))
+        {
+            Log.Warn($"Saved {lang} auth folder no longer exists: {_authFolder}");
+            _authFolder = null;
+        }
+        Log.Info(_authFolder == null ? $"No auth folder saved for {lang} yet." : $"{lang} auth folder: {_authFolder}");
+        RefreshFolderList();
+        UpdateAuthButtons();
+        UpdateLanguageDisplay();
+        if (autoSignIn && _settings.AutoSignIn && _tokenBtn.IsEnabled) await StartAuth(browser: false);
+    }
+
+    void RefreshFolderList()
+    {
+        _switching = true;
+        var items = Core.Languages.Where(l => _settings.AuthFolders.ContainsKey(l.Name))
+                                  .Select(l => new FolderEntry(l.Name, _settings.AuthFolders[l.Name])).ToList();
+        _folderCombo.ItemsSource = items;
+        _folderCombo.SelectedItem = items.FirstOrDefault(i => i.Language == _settings.Language);
+        _langCombo.SelectedItem = _settings.Language;
+        _switching = false;
     }
 
     async Task BrowseFolder()
     {
-        var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Select Auth Folder" });
+        var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = $"Select the {_settings.Language} auth folder" });
         var path = picked.FirstOrDefault()?.TryGetLocalPath();
-        if (path != null) SetAuthFolder(path);
-    }
+        if (path == null) return;
 
-    void SetAuthFolder(string path)
-    {
-        if (_signedIn) SetAuthState(false, "Auth folder changed.");
-        _authFolder = path;
-        _folderBox.Text = path;
-        _settings.AuthFolder = path; _settings.Save();
-        Log.Info($"Auth folder: {path}");
-        var detected = Core.DetectLanguage(path);
-        if (detected != null && detected != _settings.Language)
+        // The folder name decides the language when it contains one (e.g. reap_Tamil); otherwise the selected language.
+        var lang = Core.DetectLanguage(path) ?? _settings.Language;
+        if (lang != _settings.Language)
+            Log.Info($"Folder name says {lang}, switching language from {_settings.Language} to {lang}.");
+        foreach (var other in _settings.AuthFolders.Where(kv => kv.Value == path && kv.Key != lang).Select(kv => kv.Key).ToList())
         {
-            Log.Info($"Language auto-detected from folder name: {detected}");
-            _langCombo.SelectedItem = detected;
+            Log.Info($"Folder was saved for {other}; moving it to {lang}.");
+            _settings.AuthFolders.Remove(other);
         }
-        UpdateAuthButtons();
+        _settings.AuthFolders[lang] = path;
+        _settings.Language = lang;
+        _settings.Save();
+        Log.Info($"Saved {lang} auth folder: {path}");
+        await SwitchToLanguage(lang, autoSignIn: false);
     }
 
     void UpdateAuthButtons()
@@ -533,7 +573,8 @@ public class MainWindow : Window
             DisposeServices();
             _ytOAuth = new YouTubeService(new BaseClientService.Initializer { HttpClientInitializer = cred, ApplicationName = AppInfo.Name });
             _ytKey = new YouTubeService(new BaseClientService.Initializer { ApiKey = _apiKey, ApplicationName = AppInfo.Name });
-            _authStatus.Text = $"Status: {msg}";
+            _channelTitle = await FetchChannelTitle();
+            _authStatus.Text = $"Status: {msg} Signed in to YouTube channel: {_channelTitle ?? "(unknown)"}";
             SetAuthState(true, msg);
             await LoadPlaylists();
         }
@@ -556,9 +597,24 @@ public class MainWindow : Window
         await Message("Sign-in failed", msg);
     }
 
+    async Task<string?> FetchChannelTitle()
+    {
+        try
+        {
+            var req = _ytOAuth!.Channels.List("snippet");
+            req.Mine = true;
+            var title = (await req.ExecuteAsync()).Items?.FirstOrDefault()?.Snippet.Title;
+            Log.Info($"Signed-in YouTube channel: {title ?? "(none found)"}");
+            return title;
+        }
+        catch (Exception e) { Log.Warn($"Could not read channel name: {e.Message}"); return null; }
+    }
+
     void SetAuthState(bool ok, string message = "")
     {
         _signedIn = ok;
+        if (!ok) _channelTitle = null;
+        UpdateLanguageDisplay();
         _led.Fill = new SolidColorBrush(ok ? Color.Parse("#14C814") : Color.Parse("#D01414"));
         _tab2.IsEnabled = _tab3.IsEnabled = ok;
         if (ok)
@@ -676,7 +732,7 @@ public class MainWindow : Window
     {
         var todo = _renameRows.Where(r => r.Needs).ToList();
         if (todo.Count == 0) { await Message("Info", "No videos marked."); return; }
-        if (!await Message("Confirm", $"Update {todo.Count} videos on the {_settings.Language} channel?", yesNo: true)) return;
+        if (!await Message("Confirm", $"Update {todo.Count} videos on the {_settings.Language} channel \"{_channelTitle}\"?", yesNo: true)) return;
 
         _applyBtn.IsEnabled = false; _progress.Value = 0; _progress.IsVisible = true;
         Log.Info($"Starting update: {todo.Count} videos.");
