@@ -1,56 +1,52 @@
-# REAP Multi-Language YouTube Channel Manager - Executables
+# REAP YouTube Manager
 
-## 🚀 Quick Start
+Desktop tool for REAP YouTube channels: fix chapter titles and descriptions in bulk, and export a playlist to an Excel sheet.
+One app for all 12 channel languages. Open source.
 
-Download the exe for your language from the **Releases** page
-(built automatically by GitHub Actions, see `.github/workflows/build.yml`).
+## Download and run (Windows 10/11, 64-bit)
 
-### How to Run:
-1. Download `REAP_<Language>_Manager.exe` from Releases
-2. Double-click it to run
-3. In tab "1. Authentication", browse to your auth folder containing `oauth_client.json` and `api.txt`
-   (these are NOT in this repo — keep them private)
+1. Download `REAP_YouTube_Manager.exe` from the **Releases** page of this repo.
+2. Double-click it. Nothing to install (it includes everything it needs).
+3. If Windows SmartScreen says "Windows protected your PC": click **More info** > **Run anyway**.
 
-### Available Languages:
-- **English**: `REAP_English_Manager.exe`
-- **Malayalam**: `REAP_Malayalam_Manager.exe`
-- **Hindi**: `REAP_Hindi_Manager.exe`
-- **Telugu**: `REAP_Telugu_Manager.exe`
-- **Tamil**: `REAP_Tamil_Manager.exe`
-- **Kannada**: `REAP_Kannada_Manager.exe`
-- **Bengali**: `REAP_Bengali_Manager.exe`
-- **Gujarati**: `REAP_Gujarati_Manager.exe`
-- **Marathi**: `REAP_Marathi_Manager.exe`
-- **Punjabi**: `REAP_Punjabi_Manager.exe`
-- **Assamees**: `REAP_Assamees_Manager.exe`
-- **Odia**: `REAP_Odia_Manager.exe`
+## How to use
 
-## 🛡️ Windows Security Notice
+1. **Channel Language** (tab 1): pick the language. The orange badge at the top, the window title and the status bar always show it.
+   It is picked automatically when the auth folder name contains the language (e.g. `reap_Tamil`).
+2. **Auth Folder**: browse to the folder for that channel. It must contain `oauth_client.json` and `api.txt`.
+   Keep these files private, never upload them.
+3. **Sign in**
+   - First time: **Authorize (Browser)** and log in with the channel's Google account.
+   - After that: **Authorize with Token** (or tick "Sign in automatically" and it happens at start).
+   - A `token.json` from the old Python app also works.
+4. **2. Rename & Describe**: load a playlist. Bold titles are not in `Chapter N - Topic` format; check/edit the
+   Corrected and Description cells, then **Apply Changes**.
+5. **3. Excel Export**: load a playlist, check the preview, **Generate Excel Sheet**.
+   The file is saved in `<auth folder>\Excel sheet\`. You get a warning if the playlist's language code
+   (e.g. `_ta` in the playlist title) does not match the selected language.
+6. **Theme**: System / Light / Dark, top right.
 
-If Windows Defender flags the executables as suspicious:
+### Saved login stops working every 7 days?
 
-1. **Temporary Solution**: Click "More info" → "Run anyway"
-2. **Permanent Solution**: Add the folder where you saved the exe to Windows Defender exclusions
-3. **Alternative**: Run the source Python file directly with `python gen3_youtube_gem.py`
+The Google Cloud OAuth app is in "Testing" mode. Fix once in Google Cloud Console:
+**APIs & Services > OAuth consent screen > Publish app > In production**.
 
-## 🔧 Technical Details
+## Logs (for reporting problems)
 
-- **Built with**: PyInstaller --onefile
-- **Self-contained**: Each executable includes all dependencies
-- **No installation required**: Just run the .exe file
-- **Size**: Typically 20-50 MB per executable
+- **Log** tab: live log, "Show debug details" for more, "Copy all".
+- Log files: `%LOCALAPPDATA%\REAP_YouTube_Manager\logs` (the full path is shown in the Log and About tabs,
+  with **Copy path** and **Open logs folder**). Files older than 30 days are deleted automatically.
+- Settings: `%LOCALAPPDATA%\REAP_YouTube_Manager\settings.json`.
 
-## 🐛 Troubleshooting
+## Build from source
 
-1. **Auth buttons disabled**: the selected auth folder must contain `oauth_client.json` and `api.txt`
-2. **Logs**: written to `logs/` inside the selected auth folder
-3. **Excel output**: saved to `Excel sheet/` inside the selected auth folder
-
-## 🔨 Build Locally (Windows)
+Requires the .NET 10 SDK. Works on Windows and Linux.
 
 ```
-pip install -r "REAP English/requirements.txt" pyinstaller
-pyinstaller --onefile --windowed --name REAP_English_Manager "REAP English/gen3_youtube_gem.py"
+cd ReapManager
+dotnet run                                           # run on this machine
+dotnet run -- --selftest                             # logic self-test
+dotnet publish -c Release -r win-x64 -o ../publish   # single Windows exe
 ```
 
-To publish a release with all 12 exes: `git tag v1.0.1 && git push origin v1.0.1`
+The original Python version (`REAP <Language>/gen3_youtube_gem.py`) is kept for reference.

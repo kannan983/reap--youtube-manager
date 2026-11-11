@@ -1,13 +1,15 @@
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
-using Ellipse = Avalonia.Controls.Shapes.Ellipse;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using ClosedXML.Excel;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Auth.OAuth2.Flows;
@@ -16,6 +18,7 @@ using Google.Apis.Services;
 using Google.Apis.Util.Store;
 using Google.Apis.YouTube.v3;
 using Google.Apis.YouTube.v3.Data;
+using Ellipse = Avalonia.Controls.Shapes.Ellipse;
 
 namespace ReapManager;
 
@@ -30,169 +33,309 @@ public class RenameRow
     public bool Needs { get; init; }
 }
 
-static class Log
-{
-    static StreamWriter? _w;
-    public static void Init(string dir)
-    {
-        Directory.CreateDirectory(dir);
-        _w?.Dispose();
-        _w = new StreamWriter(Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".log")) { AutoFlush = true };
-        Info("Logging initialized.");
-    }
-    static void Write(string level, string msg)
-    {
-        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss,fff} - {level} - {msg}";
-        Console.WriteLine(line);
-        _w?.WriteLine(line);
-    }
-    public static void Info(string m) => Write("INFO", m);
-    public static void Error(string m) => Write("ERROR", m);
-}
-
 public class MainWindow : Window
 {
     const string OAuthClientFile = "oauth_client.json", ApiKeyFile = "api.txt", PyTokenFile = "token.json";
     const string StoreTokenFile = "Google.Apis.Auth.OAuth2.Responses.TokenResponse-user";
     static readonly string[] Scopes = [YouTubeService.Scope.YoutubeForceSsl];
-    static readonly string[] Languages =
-        ["English", "Hindi", "Tamil", "Telugu", "Kannada", "Malayalam", "Bengali", "Gujarati", "Marathi", "Punjabi", "Assamese", "Odia"];
+    static readonly string[] LanguageNames = Core.Languages.Select(l => l.Name).ToArray();
+    static readonly IBrush Accent = new SolidColorBrush(Color.Parse("#1F4E79"));
+    static readonly IBrush Orange = new SolidColorBrush(Color.Parse("#E67E22"));
+    static readonly IBrush WarnBrush = new SolidColorBrush(Color.Parse("#D35400"));
+    static readonly FontFamily Mono = new("Cascadia Mono, Consolas, DejaVu Sans Mono, Liberation Mono, monospace");
 
+    readonly Settings _settings = Settings.Current;
     string? _authFolder, _apiKey;
     CancellationTokenSource? _authCts;
     YouTubeService? _ytOAuth, _ytKey;
     readonly Dictionary<string, PlaylistInfo> _playlists = new();
     List<ExcelRow>? _excelRows;
     List<RenameRow> _renameRows = new();
+    bool _signedIn;
 
+    // header + status
+    readonly TextBlock _langBadgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.Bold };
+    readonly ComboBox _themeCombo = new() { ItemsSource = new[] { "System", "Light", "Dark" }, MinWidth = 110 };
+    readonly Ellipse _led = new() { Width = 14, Height = 14, Stroke = Brushes.DimGray, StrokeThickness = 1, Margin = new Thickness(0, 0, 8, 0) };
+    readonly TextBlock _statusText = new() { Text = "Welcome!", VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    readonly TextBlock _statusLang = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold, Margin = new Thickness(12, 0, 0, 0) };
     // tab 1
-    readonly ComboBox _langCombo = new() { ItemsSource = Languages, SelectedIndex = 0, MinWidth = 160 };
-    readonly TextBox _folderBox = new() { IsReadOnly = true, HorizontalAlignment = HorizontalAlignment.Stretch };
+    readonly ComboBox _langCombo = new() { ItemsSource = LanguageNames, MinWidth = 160 };
+    readonly TextBox _folderBox = new() { IsReadOnly = true, Watermark = "Pick the folder that has oauth_client.json and api.txt" };
     readonly Button _browseBtn = new() { Content = "Browse..." };
     readonly Button _tokenBtn = new() { Content = "Authorize with Token", IsEnabled = false };
     readonly Button _browserBtn = new() { Content = "Authorize (Browser)", IsEnabled = false };
-    readonly Button _abortBtn = new() { Content = "Abort / Reset", IsEnabled = false };
-    readonly TextBlock _authStatus = new() { Text = "Status: Awaiting folder.", FontWeight = FontWeight.Bold };
+    readonly Button _abortBtn = new() { Content = "Sign out / Reset", IsEnabled = false };
+    readonly CheckBox _autoSignIn = new() { Content = "Sign in automatically with the saved token when the app starts" };
+    readonly TextBlock _authStatus = new() { Text = "Status: Awaiting folder.", FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap };
+    readonly TextBlock _tokenInfo = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 };
     // tab 2
     readonly ComboBox _plRename = new() { IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Stretch };
     readonly Button _loadVideosBtn = new() { Content = "Load Videos", IsEnabled = false };
-    readonly TextBlock _videoStatus = new() { Text = "Status: Select playlist & load." };
+    readonly TextBlock _videoStatus = new() { Text = "Status: Select playlist & load.", Margin = new Thickness(0, 8), TextWrapping = TextWrapping.Wrap };
     readonly DataGrid _videoGrid = new() { CanUserResizeColumns = true, GridLinesVisibility = DataGridGridLinesVisibility.All };
-    readonly TextBlock _renameCount = new() { Text = "0 videos to rename.", FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#d35400")) };
+    readonly TextBlock _renameCount = new() { Text = "0 videos to rename.", FontWeight = FontWeight.Bold, Foreground = WarnBrush, VerticalAlignment = VerticalAlignment.Center };
     readonly Button _applyBtn = new() { Content = "Apply Changes", IsEnabled = false };
     readonly ProgressBar _progress = new() { IsVisible = false, Width = 200, Minimum = 0, Maximum = 100 };
     // tab 3
     readonly ComboBox _plExcel = new() { IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Stretch };
     readonly Button _loadExcelBtn = new() { Content = "Load Video Info", IsEnabled = false };
-    readonly TextBlock _excelStatus = new() { Text = "Status: Select playlist & load for preview." };
+    readonly TextBlock _excelStatus = new() { Text = "Status: Select playlist & load for preview.", Margin = new Thickness(0, 8), TextWrapping = TextWrapping.Wrap };
     readonly DataGrid _excelGrid = new() { IsReadOnly = true, CanUserResizeColumns = true, GridLinesVisibility = DataGridGridLinesVisibility.All };
-    readonly Button _genExcelBtn = new() { Content = "Generate Excel Sheet", IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Right };
+    readonly Button _genExcelBtn = new() { Content = "Generate Excel Sheet", IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
+    // tab 4: log
+    readonly TextBox _logBox = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, FontFamily = Mono, FontSize = 12 };
+    readonly CheckBox _verbose = new() { Content = "Show debug details" };
+    readonly StringBuilder _logText = new();
     // shell
     readonly TabItem _tab2 = new() { Header = "2. Rename & Describe" };
     readonly TabItem _tab3 = new() { Header = "3. Excel Export" };
-    readonly Ellipse _led = new() { Width = 14, Height = 14, Stroke = Brushes.DimGray, StrokeThickness = 1 };
-    readonly TextBlock _statusText = new() { Text = "Welcome!", VerticalAlignment = VerticalAlignment.Center };
 
     public MainWindow()
     {
-        Width = 900; Height = 700; FontSize = 13;
-        UpdateTitle();
-        _langCombo.SelectionChanged += (_, _) => UpdateTitle();
+        MinWidth = 760; MinHeight = 520; Width = 1100; Height = 760; FontSize = 13;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+        _langCombo.SelectedItem = LanguageNames.Contains(_settings.Language) ? _settings.Language : "English";
+        _themeCombo.SelectedItem = _settings.Theme;
+        _autoSignIn.IsChecked = _settings.AutoSignIn;
+        _verbose.IsChecked = _settings.VerboseLog;
+        UpdateLanguageDisplay();
+
+        _langCombo.SelectionChanged += (_, _) =>
+        {
+            _settings.Language = (string)_langCombo.SelectedItem!; _settings.Save();
+            Log.Info($"Channel language set to {_settings.Language}.");
+            UpdateLanguageDisplay();
+        };
+        _themeCombo.SelectionChanged += (_, _) =>
+        {
+            _settings.Theme = (string)_themeCombo.SelectedItem!; _settings.Save();
+            Application.Current!.RequestedThemeVariant = App.ThemeFromName(_settings.Theme);
+            Log.Debug($"Theme set to {_settings.Theme}.");
+        };
+        _autoSignIn.IsCheckedChanged += (_, _) => { _settings.AutoSignIn = _autoSignIn.IsChecked == true; _settings.Save(); };
+        _verbose.IsCheckedChanged += (_, _) => { _settings.VerboseLog = _verbose.IsChecked == true; _settings.Save(); RebuildLogView(); };
 
         _browseBtn.Click += async (_, _) => await BrowseFolder();
         _tokenBtn.Click += async (_, _) => await StartAuth(browser: false);
         _browserBtn.Click += async (_, _) => await StartAuth(browser: true);
-        _abortBtn.Click += (_, _) => { _authCts?.Cancel(); SetAuthState(false, "Reset."); };
+        _abortBtn.Click += (_, _) => { Log.Info("Sign out / reset clicked."); _authCts?.Cancel(); SetAuthState(false, "Signed out."); };
         _loadVideosBtn.Click += async (_, _) => await LoadRenameVideos();
         _applyBtn.Click += async (_, _) => await ApplyChanges();
         _loadExcelBtn.Click += async (_, _) => await LoadExcelPreview();
         _genExcelBtn.Click += async (_, _) => await GenerateExcel();
 
+        BuildGrids();
+        _tab2.Content = BuildRenameTab();
+        _tab3.Content = BuildExcelTab();
+        Content = new DockPanel
+        {
+            Children =
+            {
+                Dock(BuildHeader(), Avalonia.Controls.Dock.Top),
+                Dock(BuildStatusBar(), Avalonia.Controls.Dock.Bottom),
+                new TabControl
+                {
+                    Margin = new Thickness(8, 4, 8, 0),
+                    Items =
+                    {
+                        new TabItem { Header = "1. Authentication", Content = BuildAuthTab() },
+                        _tab2, _tab3,
+                        new TabItem { Header = "Log", Content = BuildLogTab() },
+                        new TabItem { Header = "About", Content = BuildAboutTab() },
+                    }
+                }
+            }
+        };
+
+        Log.Written += OnLogWritten;
+        RebuildLogView();
+        SetAuthState(false);
+        Opened += async (_, _) => { FitToScreen(); await RestoreLastSession(); };
+    }
+
+    // ================= layout =================
+    Control BuildHeader()
+    {
+        var badge = new Border { Background = Orange, CornerRadius = new CornerRadius(12), Padding = new Thickness(12, 4), VerticalAlignment = VerticalAlignment.Center, Child = _langBadgeText };
+        var themeLabel = new TextBlock { Text = "Theme:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center };
+        var right = Row(badge, themeLabel, _themeCombo);
+        right.VerticalAlignment = VerticalAlignment.Center;
+        var left = new StackPanel
+        {
+            Children =
+            {
+                new TextBlock { Text = AppInfo.Name, FontSize = 20, FontWeight = FontWeight.Bold, Foreground = Brushes.White },
+                new TextBlock { Text = "Rename videos and export playlists to Excel for REAP YouTube channels", FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#D0E4F5")), TextWrapping = TextWrapping.Wrap },
+            }
+        };
+        var g = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
+        Grid.SetColumn(right, 1);
+        g.Children.Add(left); g.Children.Add(right);
+        return new Border { Background = Accent, Padding = new Thickness(16, 10), Child = g };
+    }
+
+    Control BuildStatusBar()
+    {
+        var p = new DockPanel { Margin = new Thickness(10, 6) };
+        p.Children.Add(Dock(_led, Avalonia.Controls.Dock.Left));
+        p.Children.Add(Dock(_statusLang, Avalonia.Controls.Dock.Right));
+        p.Children.Add(_statusText);
+        return new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(0, 1, 0, 0), Child = p };
+    }
+
+    Control BuildAuthTab() => new ScrollViewer
+    {
+        Content = new StackPanel
+        {
+            Margin = new Thickness(12), Spacing = 10,
+            Children =
+            {
+                Wrap(new TextBlock { Text = "Channel Language:", VerticalAlignment = VerticalAlignment.Center }, _langCombo,
+                     new TextBlock { Text = "(auto-picked from the folder name when possible)", Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center }),
+                Grid3("Auth Folder:", _folderBox, _browseBtn),
+                Wrap(_tokenBtn, _browserBtn, _abortBtn),
+                _autoSignIn,
+                _authStatus,
+                _tokenInfo,
+                Panel("How to sign in",
+                    "1. Pick the Channel Language (the orange badge at the top always shows it).\n" +
+                    "2. Browse to the auth folder for that channel. It must contain oauth_client.json and api.txt.\n" +
+                    "3. First time: click 'Authorize (Browser)' and log in with the channel's Google account.\n" +
+                    "4. After that: 'Authorize with Token' reuses the saved login (token.json from the old app also works).\n" +
+                    "5. The light in the bottom-left turns green when you are signed in."),
+                Panel("If the saved token stops working",
+                    "Click 'Authorize (Browser)' to log in again.\n" +
+                    "If this happens about every 7 days, the Google Cloud OAuth app is in 'Testing' mode. Fix once in Google Cloud Console:\n" +
+                    "APIs & Services > OAuth consent screen > Publish app > 'In production'."),
+            }
+        }
+    };
+
+    Control BuildRenameTab() => new DockPanel
+    {
+        Margin = new Thickness(12),
+        Children =
+        {
+            Dock(Grid3("Select Playlist:", _plRename, _loadVideosBtn), Avalonia.Controls.Dock.Top),
+            Dock(_videoStatus, Avalonia.Controls.Dock.Top),
+            Dock(Grid3(null, _renameCount, Row(_applyBtn, _progress)), Avalonia.Controls.Dock.Bottom),
+            _videoGrid
+        }
+    };
+
+    Control BuildExcelTab() => new DockPanel
+    {
+        Margin = new Thickness(12),
+        Children =
+        {
+            Dock(Grid3("Select Playlist:", _plExcel, _loadExcelBtn), Avalonia.Controls.Dock.Top),
+            Dock(_excelStatus, Avalonia.Controls.Dock.Top),
+            Dock(_genExcelBtn, Avalonia.Controls.Dock.Bottom),
+            _excelGrid
+        }
+    };
+
+    Control BuildLogTab()
+    {
+        var copyAll = new Button { Content = "Copy all" };
+        var clear = new Button { Content = "Clear view" };
+        copyAll.Click += async (_, _) => { await Clipboard!.SetTextAsync(_logBox.Text ?? ""); Status("Log copied to clipboard."); };
+        clear.Click += (_, _) => { _logText.Clear(); _logBox.Text = ""; };
+        var tools = Wrap(_verbose, copyAll, clear);
+        tools.Margin = new Thickness(0, 0, 0, 8);
+        return new DockPanel
+        {
+            Margin = new Thickness(12),
+            Children =
+            {
+                Dock(LogsPathRow(), Avalonia.Controls.Dock.Top),
+                Dock(tools, Avalonia.Controls.Dock.Top),
+                _logBox
+            }
+        };
+    }
+
+    Control BuildAboutTab()
+    {
+        var gh = new Button { Content = "Open on GitHub" };
+        gh.Click += async (_, _) => await Launcher.LaunchUriAsync(new Uri(AppInfo.RepoUrl));
+        var repo = new TextBox { Text = AppInfo.RepoUrl, IsReadOnly = true };
+        return new ScrollViewer
+        {
+            Content = new StackPanel
+            {
+                Margin = new Thickness(12), Spacing = 10,
+                Children =
+                {
+                    new TextBlock { Text = AppInfo.Name, FontSize = 22, FontWeight = FontWeight.Bold },
+                    new TextBlock { Text = $"Version {AppInfo.Version}", Opacity = 0.8 },
+                    new TextBlock { TextWrapping = TextWrapping.Wrap, Text =
+                        "A desktop tool for REAP YouTube channels: fix chapter titles and descriptions in bulk, " +
+                        "and export a playlist to an Excel sheet (course code, chapter, URL, title, description, order, language)." },
+                    new TextBlock { Text = "Open source", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 8, 0, 0) },
+                    new TextBlock { TextWrapping = TextWrapping.Wrap, Text = "The source code is on GitHub. Bug reports and improvements are welcome." },
+                    Grid3(null, repo, gh),
+                    new TextBlock { Text = "Logs (send these when reporting a problem)", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 8, 0, 0) },
+                    LogsPathRow(),
+                    new TextBlock { Text = "Settings file", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 8, 0, 0) },
+                    new TextBox { Text = Path.Combine(AppInfo.DataDir, "settings.json"), IsReadOnly = true, FontFamily = Mono },
+                    new TextBlock { Text = "System", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 8, 0, 0) },
+                    new SelectableTextBlock { Text = $"{RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture})\n.NET {Environment.Version}", Opacity = 0.8 },
+                }
+            }
+        };
+    }
+
+    /// Full logs folder path in a selectable box + Copy path + Open folder.
+    Control LogsPathRow()
+    {
+        var box = new TextBox { Text = Log.Dir, IsReadOnly = true, FontFamily = Mono };
+        var copy = new Button { Content = "Copy path" };
+        var open = new Button { Content = "Open logs folder" };
+        copy.Click += async (_, _) => { await Clipboard!.SetTextAsync(Log.Dir); Status("Logs folder path copied."); };
+        open.Click += async (_, _) =>
+        {
+            if (!await Launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(Log.Dir)))
+                await Message("Logs folder", $"Could not open the folder automatically. Paste this path into File Explorer:\n{Log.Dir}");
+        };
+        var g = Grid3("Logs folder:", box, Row(copy, open));
+        g.Margin = new Thickness(0, 0, 0, 8);
+        return g;
+    }
+
+    void BuildGrids()
+    {
+        var star = new DataGridLength(1, DataGridLengthUnitType.Star);
         _videoGrid.Columns.Add(new DataGridTemplateColumn
         {
-            Header = "Original", Width = new DataGridLength(1, DataGridLengthUnitType.Star), IsReadOnly = true,
+            Header = "Original", Width = star, IsReadOnly = true,
             CellTemplate = new FuncDataTemplate<RenameRow>((r, _) => new TextBlock
             {
                 Text = r?.Original, Margin = new Thickness(6, 0), VerticalAlignment = VerticalAlignment.Center,
                 FontWeight = r?.Needs == true ? FontWeight.Bold : FontWeight.Normal
             })
         });
-        _videoGrid.Columns.Add(new DataGridTextColumn { Header = "Corrected", Binding = new Binding(nameof(RenameRow.Corrected)), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
-        _videoGrid.Columns.Add(new DataGridTextColumn { Header = "Description", Binding = new Binding(nameof(RenameRow.Description)), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
+        _videoGrid.Columns.Add(new DataGridTextColumn { Header = "Corrected (editable)", Binding = new Binding(nameof(RenameRow.Corrected)), Width = star });
+        _videoGrid.Columns.Add(new DataGridTextColumn { Header = "Description (editable)", Binding = new Binding(nameof(RenameRow.Description)), Width = star });
 
         string[] props = [nameof(ExcelRow.CourseCode), nameof(ExcelRow.ChapterName), nameof(ExcelRow.YouTubeUrl), nameof(ExcelRow.VideoTitle),
                           nameof(ExcelRow.VideoDescription), nameof(ExcelRow.OrderNo), nameof(ExcelRow.LanguageCode)];
         for (int i = 0; i < props.Length; i++)
             _excelGrid.Columns.Add(new DataGridTextColumn { Header = Core.ExcelHeaders[i], Binding = new Binding(props[i]) });
-
-        var tab1 = new StackPanel
-        {
-            Margin = new Thickness(12), Spacing = 10,
-            Children =
-            {
-                Row(new TextBlock { Text = "Channel Language:", VerticalAlignment = VerticalAlignment.Center }, _langCombo),
-                Grid3("Auth Folder:", _folderBox, _browseBtn),
-                Row(_tokenBtn, _browserBtn, _abortBtn),
-                _authStatus,
-                new Border
-                {
-                    BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1), Padding = new Thickness(10),
-                    Child = new TextBlock
-                    {
-                        TextWrapping = TextWrapping.Wrap,
-                        Text = "Instructions:\n1. Pick the channel language.\n2. Select the auth folder (must contain oauth_client.json and api.txt).\n" +
-                               "3. Use 'Token' (saved login) or 'Browser' (first time).\n4. Status / LED will update."
-                    }
-                }
-            }
-        };
-        _tab2.Content = new DockPanel
-        {
-            Margin = new Thickness(12),
-            Children =
-            {
-                Dock(Grid3("Select Playlist:", _plRename, _loadVideosBtn), Avalonia.Controls.Dock.Top),
-                Dock(_videoStatus, Avalonia.Controls.Dock.Top),
-                Dock(Grid3(null, _renameCount, Row(_applyBtn, _progress)), Avalonia.Controls.Dock.Bottom),
-                _videoGrid
-            }
-        };
-        _tab3.Content = new DockPanel
-        {
-            Margin = new Thickness(12),
-            Children =
-            {
-                Dock(Grid3("Select Playlist:", _plExcel, _loadExcelBtn), Avalonia.Controls.Dock.Top),
-                Dock(_excelStatus, Avalonia.Controls.Dock.Top),
-                Dock(_genExcelBtn, Avalonia.Controls.Dock.Bottom),
-                _excelGrid
-            }
-        };
-        _videoStatus.Margin = _excelStatus.Margin = new Thickness(0, 8);
-        _genExcelBtn.Margin = new Thickness(0, 8, 0, 0);
-
-        var statusBar = new DockPanel
-        {
-            Margin = new Thickness(8, 4), LastChildFill = true,
-            Children = { Dock(_led, Avalonia.Controls.Dock.Left), _statusText }
-        };
-        _led.Margin = new Thickness(0, 0, 8, 0);
-        Content = new DockPanel
-        {
-            Children =
-            {
-                Dock(statusBar, Avalonia.Controls.Dock.Bottom),
-                new TabControl { Items = { new TabItem { Header = "1. Authentication", Content = tab1 }, _tab2, _tab3 } }
-            }
-        };
-        SetAuthState(false);
     }
 
-    // ---------- layout helpers ----------
     static T Dock<T>(T c, Dock d) where T : Control { DockPanel.SetDock(c, d); return c; }
     static StackPanel Row(params Control[] cs)
     {
         var p = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        p.Children.AddRange(cs);
+        return p;
+    }
+    static WrapPanel Wrap(params Control[] cs)
+    {
+        var p = new WrapPanel { ItemSpacing = 8, LineSpacing = 8 };
         p.Children.AddRange(cs);
         return p;
     }
@@ -204,8 +347,36 @@ public class MainWindow : Window
         g.Children.Add(middle); g.Children.Add(right);
         return g;
     }
+    static Border Panel(string title, string body) => new()
+    {
+        BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(10),
+        Child = new StackPanel
+        {
+            Spacing = 4,
+            Children = { new TextBlock { Text = title, FontWeight = FontWeight.Bold }, new SelectableTextBlock { Text = body, TextWrapping = TextWrapping.Wrap } }
+        }
+    };
 
-    void UpdateTitle() => Title = $"Reap {_langCombo.SelectedItem} YouTube Channel Manager";
+    /// Size the window to the laptop/monitor it opens on (85% of the work area, capped).
+    void FitToScreen()
+    {
+        var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        if (screen == null) return;
+        var wa = screen.WorkingArea; var s = screen.Scaling;
+        Width = Math.Clamp(wa.Width / s * 0.85, MinWidth, 1300);
+        Height = Math.Clamp(wa.Height / s * 0.85, MinHeight, 900);
+        Position = new PixelPoint(wa.X + (int)((wa.Width - Width * s) / 2), wa.Y + (int)((wa.Height - Height * s) / 2));
+        Log.Debug($"Screen {wa.Width}x{wa.Height} @ {s:0.##}x, window {Width:0}x{Height:0}.");
+    }
+
+    void UpdateLanguageDisplay()
+    {
+        var lang = _settings.Language;
+        Title = $"{AppInfo.Name} - {lang} channel";
+        _langBadgeText.Text = $"Language: {lang} ({Core.LanguageCode(lang)})";
+        _statusLang.Text = $"Channel: {lang}";
+    }
+
     void Status(string s) => _statusText.Text = s;
 
     async Task<bool> Message(string title, string text, bool yesNo = false)
@@ -213,11 +384,11 @@ public class MainWindow : Window
         bool result = false;
         var dlg = new Window
         {
-            Title = title, Width = 460, SizeToContent = SizeToContent.Height,
+            Title = title, Width = 480, SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false
         };
-        var ok = new Button { Content = yesNo ? "Yes" : "OK", MinWidth = 70 };
-        var no = new Button { Content = "No", MinWidth = 70, IsVisible = yesNo };
+        var ok = new Button { Content = yesNo ? "Yes" : "OK", MinWidth = 70, IsDefault = true };
+        var no = new Button { Content = "No", MinWidth = 70, IsVisible = yesNo, IsCancel = true };
         ok.Click += (_, _) => { result = true; dlg.Close(); };
         no.Click += (_, _) => dlg.Close();
         var buttons = Row(ok, no);
@@ -231,40 +402,89 @@ public class MainWindow : Window
         return result;
     }
 
-    // ---------- tab 1: auth ----------
+    // ================= log view =================
+    void OnLogWritten(LogLevel level, string line) => Dispatcher.UIThread.Post(() =>
+    {
+        if (level == LogLevel.Debug && _verbose.IsChecked != true) return;
+        _logText.AppendLine(line);
+        if (_logText.Length > 400_000) RebuildLogView(); // keep memory bounded
+        else _logBox.Text = _logText.ToString();
+        _logBox.CaretIndex = _logBox.Text?.Length ?? 0;
+    });
+
+    void RebuildLogView()
+    {
+        bool verbose = _verbose.IsChecked == true;
+        _logText.Clear();
+        foreach (var (level, line) in Log.Snapshot())
+            if (verbose || level != LogLevel.Debug) _logText.AppendLine(line);
+        _logBox.Text = _logText.ToString();
+        _logBox.CaretIndex = _logBox.Text.Length;
+    }
+
+    // ================= tab 1: auth =================
+    async Task RestoreLastSession()
+    {
+        if (_settings.AuthFolder == null) return;
+        if (!Directory.Exists(_settings.AuthFolder)) { Log.Warn($"Saved auth folder no longer exists: {_settings.AuthFolder}"); return; }
+        Log.Info($"Restoring last auth folder: {_settings.AuthFolder}");
+        SetAuthFolder(_settings.AuthFolder);
+        if (_settings.AutoSignIn && _tokenBtn.IsEnabled) await StartAuth(browser: false);
+    }
+
     async Task BrowseFolder()
     {
         var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Select Auth Folder" });
         var path = picked.FirstOrDefault()?.TryGetLocalPath();
-        if (path == null) return;
+        if (path != null) SetAuthFolder(path);
+    }
+
+    void SetAuthFolder(string path)
+    {
+        if (_signedIn) SetAuthState(false, "Auth folder changed.");
         _authFolder = path;
         _folderBox.Text = path;
-        Log.Init(Path.Combine(path, "logs"));
+        _settings.AuthFolder = path; _settings.Save();
+        Log.Info($"Auth folder: {path}");
+        var detected = Core.DetectLanguage(path);
+        if (detected != null && detected != _settings.Language)
+        {
+            Log.Info($"Language auto-detected from folder name: {detected}");
+            _langCombo.SelectedItem = detected;
+        }
         UpdateAuthButtons();
     }
 
     void UpdateAuthButtons()
     {
-        bool oauthOk = false, apiOk = false, tokenExists = false;
+        bool oauthOk = false, apiOk = false, pyToken = false, storeToken = false;
         _apiKey = null;
         if (_authFolder != null)
         {
             oauthOk = File.Exists(Path.Combine(_authFolder, OAuthClientFile));
-            tokenExists = File.Exists(Path.Combine(_authFolder, PyTokenFile)) || File.Exists(Path.Combine(_authFolder, StoreTokenFile));
+            pyToken = File.Exists(Path.Combine(_authFolder, PyTokenFile));
+            storeToken = File.Exists(Path.Combine(_authFolder, StoreTokenFile));
             try
             {
                 var m = Regex.Match(File.ReadAllText(Path.Combine(_authFolder, ApiKeyFile)), @"""API Key""\s*:\s*""(.*?)""");
                 if (m.Success) { _apiKey = m.Groups[1].Value; apiOk = true; }
             }
-            catch { /* missing api.txt => apiOk stays false */ }
+            catch (Exception e) { Log.Debug($"api.txt not readable: {e.Message}"); }
+            Log.Debug($"Auth folder check: oauth_client.json={oauthOk}, api.txt key={apiOk}, token.json={pyToken}, saved token={storeToken}");
         }
         bool filesOk = oauthOk && apiOk;
-        _browserBtn.IsEnabled = filesOk;
-        _tokenBtn.IsEnabled = filesOk && tokenExists;
+        _browserBtn.IsEnabled = filesOk && !_signedIn;
+        _tokenBtn.IsEnabled = filesOk && (pyToken || storeToken) && !_signedIn;
         _abortBtn.IsEnabled = _authFolder != null;
-        _authStatus.Text = _authFolder == null ? "Status: Awaiting folder."
-            : !filesOk ? "Status: Error! oauth_client.json/api.txt missing."
-            : "Status: Ready. Use Token or Browser.";
+        if (!_signedIn)
+            _authStatus.Text = _authFolder == null ? "Status: Awaiting folder."
+                : !oauthOk ? "Status: Error! oauth_client.json is missing in this folder."
+                : !apiOk ? "Status: Error! api.txt is missing or has no \"API Key\"."
+                : "Status: Ready. Use Token or Browser.";
+        _tokenInfo.Text = _authFolder == null ? ""
+            : storeToken ? "Saved login: found (from this app)."
+            : pyToken ? "Saved login: found (token.json from the old Python app)."
+            : "Saved login: none yet. Use 'Authorize (Browser)' once.";
     }
 
     /// Seeds the Google token store from the old Python app's token.json, so existing logins keep working.
@@ -273,24 +493,30 @@ public class MainWindow : Window
         var path = Path.Combine(_authFolder!, PyTokenFile);
         if (!File.Exists(path)) return null;
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
-        return doc.RootElement.TryGetProperty("refresh_token", out var rt) ? new TokenResponse { RefreshToken = rt.GetString() } : null;
+        if (!doc.RootElement.TryGetProperty("refresh_token", out var rt)) return null;
+        Log.Info("Using refresh token from token.json (old Python app).");
+        return new TokenResponse { RefreshToken = rt.GetString() };
     }
 
     async Task StartAuth(bool browser)
     {
         if (_authFolder == null) return;
+        var mode = browser ? "browser" : "token";
         _browserBtn.IsEnabled = _tokenBtn.IsEnabled = false; _abortBtn.IsEnabled = true;
-        _authStatus.Text = $"Status: Starting '{(browser ? "browser" : "token")}' auth..."; Status("Auth in progress...");
-        Log.Info($"Starting auth (mode: {(browser ? "browser" : "token")}).");
+        _authStatus.Text = $"Status: Starting '{mode}' auth..."; Status("Auth in progress...");
+        Log.Info($"Starting auth (mode: {mode}).");
+        _authCts?.Dispose();
         _authCts = new CancellationTokenSource();
         try
         {
             var secrets = GoogleClientSecrets.FromFile(Path.Combine(_authFolder, OAuthClientFile)).Secrets;
+            Log.Debug($"OAuth client id: {secrets.ClientId}");
             var store = new FileDataStore(_authFolder, fullPath: true);
-            UserCredential? cred;
+            UserCredential cred;
             string msg;
             if (browser)
             {
+                Log.Info("Opening browser for Google sign-in...");
                 cred = await GoogleWebAuthorizationBroker.AuthorizeAsync(secrets, Scopes, "user", _authCts.Token, store);
                 msg = "Auth successful.";
             }
@@ -298,47 +524,73 @@ public class MainWindow : Window
             {
                 var flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer { ClientSecrets = secrets, Scopes = Scopes, DataStore = store });
                 var token = await flow.LoadTokenAsync("user", _authCts.Token) ?? ImportPythonToken();
-                if (token?.RefreshToken == null) { await AuthFailed("Token invalid/missing."); return; }
+                if (token?.RefreshToken == null) { await AuthFailed("Token invalid/missing. Use 'Authorize (Browser)'."); return; }
                 cred = new UserCredential(flow, "user", token);
-                if (!await cred.RefreshTokenAsync(_authCts.Token)) { await AuthFailed("Token refresh failed."); return; }
+                if (!await cred.RefreshTokenAsync(_authCts.Token)) { await AuthFailed("Token refresh failed. Use 'Authorize (Browser)'."); return; }
                 msg = "Token loaded.";
             }
-            var init = new BaseClientService.Initializer { HttpClientInitializer = cred, ApplicationName = "REAP YouTube Manager" };
-            _ytOAuth = new YouTubeService(init);
-            _ytKey = new YouTubeService(new BaseClientService.Initializer { ApiKey = _apiKey, ApplicationName = "REAP YouTube Manager" });
+            Log.Debug($"Access token valid until {cred.Token.IssuedUtc.AddSeconds(cred.Token.ExpiresInSeconds ?? 0):u} (refreshed automatically).");
+            DisposeServices();
+            _ytOAuth = new YouTubeService(new BaseClientService.Initializer { HttpClientInitializer = cred, ApplicationName = AppInfo.Name });
+            _ytKey = new YouTubeService(new BaseClientService.Initializer { ApiKey = _apiKey, ApplicationName = AppInfo.Name });
             _authStatus.Text = $"Status: {msg}";
             SetAuthState(true, msg);
             await LoadPlaylists();
         }
-        catch (OperationCanceledException) { SetAuthState(false, "Aborted."); }
+        catch (OperationCanceledException) { Log.Info("Auth aborted."); SetAuthState(false, "Aborted."); }
+        catch (TokenResponseException e) when (e.Error?.Error == "invalid_grant")
+        {
+            Log.Error($"Saved token rejected by Google: {e.Error.ErrorDescription}");
+            await AuthFailed("The saved login expired or was revoked.\n\nClick 'Authorize (Browser)' to sign in again.\n\n" +
+                             "If this happens about every 7 days, the Google Cloud OAuth app is in 'Testing' mode: " +
+                             "publish it to 'In production' (APIs & Services > OAuth consent screen).");
+        }
         catch (Exception e) { Log.Error($"Auth error: {e}"); await AuthFailed($"Auth failed: {e.Message}"); }
     }
 
     async Task AuthFailed(string msg)
     {
-        _authStatus.Text = $"Status: {msg}";
-        SetAuthState(false, msg);
-        await Message("Auth Failed", msg);
+        var first = msg.Split('\n')[0];
+        SetAuthState(false, first);
+        _authStatus.Text = $"Status: {first}";
+        await Message("Sign-in failed", msg);
     }
 
     void SetAuthState(bool ok, string message = "")
     {
-        _led.Fill = new SolidColorBrush(ok ? Color.Parse("#14c814") : Color.Parse("#d01414"));
+        _signedIn = ok;
+        _led.Fill = new SolidColorBrush(ok ? Color.Parse("#14C814") : Color.Parse("#D01414"));
         _tab2.IsEnabled = _tab3.IsEnabled = ok;
         if (ok)
         {
             _browserBtn.IsEnabled = _tokenBtn.IsEnabled = false; _abortBtn.IsEnabled = true;
-            Status($"Authenticated! ({message})"); Log.Info($"Authenticated! ({message})");
+            Status($"Signed in ({message})"); Log.Info($"Authenticated! ({message})");
             return;
         }
-        _ytOAuth = _ytKey = null;
+        DisposeServices();
+        _playlists.Clear(); _renameRows = new(); _excelRows = null;
         _plRename.ItemsSource = _plExcel.ItemsSource = null;
         _videoGrid.ItemsSource = _excelGrid.ItemsSource = null;
-        Status(message == "" ? "Not Authenticated." : $"Not Authenticated. ({message})");
+        Status(message == "" ? "Not signed in." : $"Not signed in. ({message})");
         UpdateAuthButtons();
     }
 
-    // ---------- playlists / videos ----------
+    void DisposeServices()
+    {
+        _ytOAuth?.Dispose(); _ytKey?.Dispose();
+        _ytOAuth = _ytKey = null;
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        Log.Written -= OnLogWritten;
+        _authCts?.Cancel(); _authCts?.Dispose();
+        DisposeServices();
+        Log.Info("Main window closed.");
+        base.OnClosed(e);
+    }
+
+    // ================= playlists / videos =================
     record PlaylistItemView(string Id, string Text) { public override string ToString() => Text; }
 
     async Task LoadPlaylists()
@@ -354,6 +606,7 @@ public class MainWindow : Window
                 var req = _ytOAuth!.Playlists.List("snippet,contentDetails");
                 req.Mine = true; req.MaxResults = 50; req.PageToken = page;
                 var r = await req.ExecuteAsync();
+                Log.Debug($"Playlists page: {r.Items.Count} items, next={r.NextPageToken ?? "-"}");
                 foreach (var i in r.Items)
                     _playlists[i.Id] = new PlaylistInfo(i.Id, i.Snippet.Title, i.Snippet.Description ?? "", i.ContentDetails.ItemCount ?? 0);
                 page = r.NextPageToken;
@@ -362,15 +615,16 @@ public class MainWindow : Window
             var items = _playlists.Values.Select(p =>
             {
                 var d = p.Description.Length > 30 ? p.Description[..30] + "..." : p.Description;
-                return new PlaylistItemView(p.Id, $"{p.Title} - {d} - {p.VideoCount} videos");
+                return new PlaylistItemView(p.Id, $"{p.Title} - {d.ReplaceLineEndings(" ")} - {p.VideoCount} videos");
             }).ToList();
             _plRename.ItemsSource = items; _plExcel.ItemsSource = items;
-            if (items.Count == 0) { await Message("Info", "No playlists found/error."); return; }
+            Log.Info($"Loaded {items.Count} playlists.");
+            if (items.Count == 0) { await Message("Info", "No playlists found on this channel."); return; }
             _plRename.SelectedIndex = _plExcel.SelectedIndex = 0;
             _plRename.IsEnabled = _plExcel.IsEnabled = _loadVideosBtn.IsEnabled = _loadExcelBtn.IsEnabled = true;
-            Status("Playlists loaded.");
+            Status($"Signed in. {items.Count} playlists loaded.");
         }
-        catch (Exception e) { Log.Error($"Error fetching playlists: {e}"); Status($"Error: {e.Message}"); }
+        catch (Exception e) { Log.Error($"Error fetching playlists: {e}"); Status($"Error loading playlists: {e.Message}"); }
     }
 
     async Task<List<VideoInfo>> FetchVideos(string playlistId)
@@ -383,18 +637,20 @@ public class MainWindow : Window
             var req = _ytKey!.PlaylistItems.List("snippet");
             req.PlaylistId = playlistId; req.MaxResults = 50; req.PageToken = page;
             var r = await req.ExecuteAsync();
+            Log.Debug($"Videos page: {r.Items.Count} items, next={r.NextPageToken ?? "-"}");
             foreach (var i in r.Items)
                 videos.Add(new VideoInfo(i.Snippet.ResourceId.VideoId, i.Snippet.Title, i.Snippet.Description ?? ""));
             page = r.NextPageToken;
         } while (page != null);
+        Log.Info($"Fetched {videos.Count} videos.");
         return videos;
     }
 
-    // ---------- tab 2: rename ----------
+    // ================= tab 2: rename =================
     async Task LoadRenameVideos()
     {
         if (_plRename.SelectedItem is not PlaylistItemView pl) return;
-        Status("Loading rename videos..."); _videoGrid.ItemsSource = null;
+        Status("Loading videos..."); _videoGrid.ItemsSource = null;
         _loadVideosBtn.IsEnabled = _applyBtn.IsEnabled = false;
         try
         {
@@ -402,13 +658,15 @@ public class MainWindow : Window
             _renameRows = videos.Select(v =>
             {
                 var (corrected, desc, needs) = Core.CorrectTitle(v.Title);
+                if (needs) Log.Debug($"Needs rename: '{v.Title}' -> '{corrected}'");
                 return new RenameRow { Original = v.Title, Corrected = corrected, Description = desc, VideoId = v.VideoId, Needs = needs };
             }).ToList();
             _videoGrid.ItemsSource = _renameRows;
             int count = _renameRows.Count(r => r.Needs);
-            _videoStatus.Text = $"Loaded {videos.Count} videos."; _renameCount.Text = $"{count} to rename.";
+            _videoStatus.Text = $"Loaded {videos.Count} videos. Bold titles will be renamed; you can edit the Corrected and Description cells.";
+            _renameCount.Text = $"{count} videos to rename.";
             _applyBtn.IsEnabled = count > 0;
-            Status("Videos fetched for processing.");
+            Status("Videos loaded.");
         }
         catch (Exception e) { Log.Error($"Error fetching videos: {e}"); _videoStatus.Text = $"Status: No videos / error: {e.Message}"; }
         finally { _loadVideosBtn.IsEnabled = true; }
@@ -418,7 +676,7 @@ public class MainWindow : Window
     {
         var todo = _renameRows.Where(r => r.Needs).ToList();
         if (todo.Count == 0) { await Message("Info", "No videos marked."); return; }
-        if (!await Message("Confirm", $"Update {todo.Count} videos?", yesNo: true)) return;
+        if (!await Message("Confirm", $"Update {todo.Count} videos on the {_settings.Language} channel?", yesNo: true)) return;
 
         _applyBtn.IsEnabled = false; _progress.Value = 0; _progress.IsVisible = true;
         Log.Info($"Starting update: {todo.Count} videos.");
@@ -439,7 +697,7 @@ public class MainWindow : Window
                         Snippet = new VideoSnippet { Title = row.Corrected, Description = row.Description, CategoryId = res.Items[0].Snippet.CategoryId }
                     };
                     await _ytOAuth.Videos.Update(body, "snippet").ExecuteAsync();
-                    ok++; Log.Info($"Updated {row.VideoId}");
+                    ok++; Log.Info($"Updated {row.VideoId}: '{row.Corrected}'");
                 }
             }
             catch (Exception e) { Log.Error($"Error updating {row.VideoId}: {e.Message}"); fail++; }
@@ -448,16 +706,16 @@ public class MainWindow : Window
         }
         _progress.IsVisible = false;
         var msg = $"Update complete. OK: {ok}, Failed: {fail}.";
-        Status(msg);
-        await Message("Update Complete", msg);
+        Log.Info(msg); Status(msg);
+        await Message("Update Complete", fail > 0 ? msg + "\n\nSee the Log tab for the failed videos." : msg);
         await LoadRenameVideos();
     }
 
-    // ---------- tab 3: excel ----------
+    // ================= tab 3: excel =================
     async Task LoadExcelPreview()
     {
         if (_plExcel.SelectedItem is not PlaylistItemView pl) return;
-        _excelStatus.Text = $"Status: Fetching videos for {pl.Id}...";
+        _excelStatus.Text = $"Status: Fetching videos for {pl.Id}..."; _excelStatus.ClearValue(TextBlock.ForegroundProperty);
         _excelGrid.ItemsSource = null; _excelRows = null;
         _loadExcelBtn.IsEnabled = _genExcelBtn.IsEnabled = false;
         try
@@ -467,11 +725,21 @@ public class MainWindow : Window
             Log.Info($"Processing {videos.Count} videos for Excel (Playlist Title: {title}).");
             _excelRows = Core.BuildExcelRows(title, videos);
             _excelGrid.ItemsSource = _excelRows;
-            _excelStatus.Text = $"Status: {_excelRows.Count} videos processed. Ready to generate Excel.";
             _genExcelBtn.IsEnabled = _excelRows.Count > 0;
+            var warn = LanguageMismatch();
+            _excelStatus.Text = $"Status: {_excelRows.Count} videos processed. Ready to generate Excel." + (warn == null ? "" : "\n" + warn);
+            if (warn != null) { _excelStatus.Foreground = WarnBrush; Log.Warn(warn); }
         }
         catch (Exception e) { Log.Error($"Error fetching videos: {e}"); _excelStatus.Text = $"Status: Failed - {e.Message}"; }
         finally { _loadExcelBtn.IsEnabled = true; }
+    }
+
+    string? LanguageMismatch()
+    {
+        var got = _excelRows?.FirstOrDefault()?.LanguageCode;
+        var want = Core.LanguageCode(_settings.Language);
+        return got == null || got == want ? null
+            : $"Warning: this playlist's language code is '{got}', but the selected channel language is {_settings.Language} ({want}).";
     }
 
     async Task GenerateExcel()
@@ -480,6 +748,9 @@ public class MainWindow : Window
         {
             await Message("Error", "No data loaded or auth folder not set."); return;
         }
+        var warn = LanguageMismatch();
+        if (warn != null && !await Message("Language mismatch", warn + "\n\nGenerate the Excel file anyway?", yesNo: true)) return;
+
         var p = _playlists[pl.Id];
         var desc = string.IsNullOrEmpty(p.Description) ? "No_Description" : p.Description;
         var fileName = $"{Core.SanitizeFilename(desc)}_{Core.CourseCode(p.Title)}.xlsx";
@@ -506,12 +777,13 @@ public class MainWindow : Window
                 wb.SaveAs(path);
             }
             Log.Info("Excel file generation successful.");
+            Status($"Excel saved: {fileName}");
             await Message("Success", $"Excel file saved successfully to:\n{path}");
         }
         catch (Exception e)
         {
             Log.Error($"Excel save failed: {e}");
-            await Message("Error", $"Failed to save Excel file: {e.Message}");
+            await Message("Error", $"Failed to save Excel file: {e.Message}\n\nSee the Log tab for details.");
         }
     }
 }

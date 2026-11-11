@@ -17,6 +17,23 @@ public static class Core
     public static readonly string[] ExcelHeaders =
         ["Course Code", "Chapter Name", "YouTube URL", "Video Title", "Video Description", "OrderNo in Chapter", "Language Code"];
 
+    public static readonly (string Name, string Code)[] Languages =
+    [
+        ("English", "en"), ("Hindi", "hi"), ("Tamil", "ta"), ("Telugu", "te"), ("Kannada", "kn"), ("Malayalam", "ml"),
+        ("Bengali", "bn"), ("Gujarati", "gu"), ("Marathi", "mr"), ("Punjabi", "pa"), ("Assamese", "as"), ("Odia", "or"),
+    ];
+
+    public static string LanguageCode(string name) => Languages.FirstOrDefault(l => l.Name == name).Code ?? "";
+
+    /// Guess the channel language from an auth folder name like "reap_English" or "REAP Assamees".
+    public static string? DetectLanguage(string folderPath)
+    {
+        var name = folderPath.TrimEnd('/', '\\').Split('/', '\\')[^1].ToLowerInvariant();
+        if (name.Contains("assamees")) return "Assamese";
+        if (name.Contains("oriya")) return "Odia";
+        return Languages.Select(l => l.Name).FirstOrDefault(n => name.Contains(n.ToLowerInvariant()));
+    }
+
     const RegexOptions I = RegexOptions.IgnoreCase;
     static readonly Regex TitleFormat = new(@"^Chapter \d+[A-Z]? - .*", I);
     static readonly Regex ChapterRx = new(@"^Chapter (\d+)([A-Z]?) - .*", I);
@@ -139,6 +156,10 @@ public static class Core
             Check(string.Join(",", rows.Select(r => r.OrderNo)) == ",0,1,2,0", "order numbers");
             Check(rows[2].ChapterName == "Chapter 1 - Base", "sub-chapter uses base title");
             Check(rows[0].CourseCode == "NARQ30056" && rows[0].LanguageCode == "en", "course/lang code");
+            Check(DetectLanguage(@"D:\1. Youtube-maager-IITM-main\REAP English\reap_English") == "English", "detect language (Windows path)");
+            Check(DetectLanguage("/x/REAP Assamees/reap_Assamees/") == "Assamese", "detect Assamees alias");
+            Check(DetectLanguage("/x/auth") == null, "detect nothing");
+            Check(LanguageCode("Odia") == "or", "language code");
             return 0;
         }
         catch (Exception e) { Console.WriteLine(e.Message); return 1; }
