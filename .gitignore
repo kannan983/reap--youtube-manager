@@ -23,3 +23,9 @@ Excel sheet/
 .serena/
 .moai/
 memory/
+
+# .NET
+bin/
+obj/
+publish/
+*.pdb
