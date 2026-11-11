@@ -22,7 +22,7 @@ Punjabi, Assamese, Odia. Light and dark mode. Open source.
 
 ![Authentication tab, light mode](docs/screenshots/auth-light.png)
 
-**Dark mode:**
+**Dark mode, text size 130%** (eye icon in the header):
 
 ![Authentication tab, dark mode](docs/screenshots/auth-dark.png)
 
@@ -108,9 +108,12 @@ folders with Browse.
 3. The language code comes from the end of the playlist title (`NARQ30056_ta` -> `ta`). If it does not match
    the selected language you get a warning first.
 
-## Theme
+## Text size (eye icon) and theme
 
-Top-right: **System**, **Light** or **Dark**. Remembered for next time.
+- **Text size** (eye icon in the header, next to the language badge): 100% to 200%. Makes everything bigger
+  (text, buttons, tables, pop-ups) to reduce eye strain. Remembered for next time.
+  Keyboard: **Ctrl +** bigger, **Ctrl -** smaller, **Ctrl 0** back to 100%.
+- **Theme** (top-right): **System**, **Light** or **Dark**. Remembered for next time.
 
 ## Problems and fixes
 

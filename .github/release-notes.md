@@ -14,6 +14,7 @@
 - Language mismatch warning before generating an Excel sheet.
 - Fix: Excel save failed when the playlist description had a line break (`[Errno 22] Invalid argument`).
 - Fix: saved-token expiry check error.
+- Text size 100-200% (eye icon, Ctrl +/-/0) to reduce eye strain.
 - Light / Dark / System theme, Help tab, live Log tab, logs folder path with Copy path / Open folder, About page.
 - Reuses `token.json` from the old Python app.
 

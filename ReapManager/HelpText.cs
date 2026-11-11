@@ -12,6 +12,13 @@ static class HelpText
          "  - YouTube channel: the real channel name from Google after you sign in\n" +
          "All three must belong to the same language. The window title and the bottom-right of the status bar show it too."),
 
+        ("Text size (eye icon) - reduce eye strain",
+         "Text too small? Use the eye icon 'Text size' in the blue header, next to the language badge:\n" +
+         "  100% (normal), 115%, 130%, 150%, 175%, 200%.\n" +
+         "It makes everything bigger: text, buttons, tables and pop-up messages. The size is remembered for next time.\n" +
+         "Keyboard: Ctrl + (bigger), Ctrl - (smaller), Ctrl 0 (back to 100%).\n" +
+         "Dark mode (Theme: Dark) is also easier on the eyes in a dim room."),
+
         ("1. One-time setup: one auth folder per language",
          "Every language is a separate YouTube channel, so each language needs its own auth folder with that channel's files:\n\n" +
          "  D:\\REAP Auth\\reap_English\\     oauth_client.json  +  api.txt\n" +

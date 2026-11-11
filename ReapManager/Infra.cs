@@ -67,6 +67,7 @@ public class Settings
     public Dictionary<string, string> AuthFolders { get; set; } = new();
     public bool AutoSignIn { get; set; } = true;
     public bool VerboseLog { get; set; }
+    public double TextScale { get; set; } = 1.0;
 
     public static Settings Current { get; private set; } = new();
     static string FilePath => Path.Combine(AppInfo.DataDir, "settings.json");

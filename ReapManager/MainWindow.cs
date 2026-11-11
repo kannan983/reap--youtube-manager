@@ -18,7 +18,10 @@ using Google.Apis.Services;
 using Google.Apis.Util.Store;
 using Google.Apis.YouTube.v3;
 using Google.Apis.YouTube.v3.Data;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Ellipse = Avalonia.Controls.Shapes.Ellipse;
+using PathShape = Avalonia.Controls.Shapes.Path;
 
 namespace ReapManager;
 
@@ -63,6 +66,11 @@ public class MainWindow : Window
     readonly TextBlock _langBadgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.Bold };
     readonly TextBlock _headerChannel = new() { Foreground = Brushes.White, FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
     readonly ComboBox _themeCombo = new() { ItemsSource = new[] { "System", "Light", "Dark" }, MinWidth = 110 };
+    static readonly double[] Scales = [1.0, 1.15, 1.3, 1.5, 1.75, 2.0];
+    readonly ComboBox _scaleCombo = new() { ItemsSource = Scales.Select(x => $"{x * 100:0}%").ToArray(), MinWidth = 90 };
+    readonly LayoutTransformControl _zoom = new();
+    // Material Design "eye" icon (Apache-2.0)
+    const string EyeIcon = "M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z";
     readonly Ellipse _led = new() { Width = 14, Height = 14, Stroke = Brushes.DimGray, StrokeThickness = 1, Margin = new Thickness(0, 0, 8, 0) };
     readonly TextBlock _statusText = new() { Text = "Welcome!", VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     readonly TextBlock _statusLang = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold, Margin = new Thickness(12, 0, 0, 0) };
@@ -130,6 +138,19 @@ public class MainWindow : Window
             Log.Debug($"Theme set to {_settings.Theme}.");
         };
         _autoSignIn.IsCheckedChanged += (_, _) => { _settings.AutoSignIn = _autoSignIn.IsChecked == true; _settings.Save(); };
+        _scaleCombo.SelectedIndex = NearestScale(_settings.TextScale);
+        _scaleCombo.SelectionChanged += (_, _) => ApplyScale(Scales[Math.Max(0, _scaleCombo.SelectedIndex)]);
+        // Ctrl + / Ctrl - / Ctrl 0 change text size anywhere (tunnel so text boxes don't swallow it)
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (!e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
+            int i = _scaleCombo.SelectedIndex;
+            if (e.Key is Key.OemPlus or Key.Add) i = Math.Min(i + 1, Scales.Length - 1);
+            else if (e.Key is Key.OemMinus or Key.Subtract) i = Math.Max(i - 1, 0);
+            else if (e.Key is Key.D0 or Key.NumPad0) i = 0;
+            else return;
+            _scaleCombo.SelectedIndex = i; e.Handled = true;
+        }, RoutingStrategies.Tunnel);
         _verbose.IsCheckedChanged += (_, _) => { _settings.VerboseLog = _verbose.IsChecked == true; _settings.Save(); RebuildLogView(); };
 
         _browseBtn.Click += async (_, _) => await BrowseFolder();
@@ -144,7 +165,7 @@ public class MainWindow : Window
         BuildGrids();
         _tab2.Content = BuildRenameTab();
         _tab3.Content = BuildExcelTab();
-        Content = new DockPanel
+        _zoom.Child = new DockPanel
         {
             Children =
             {
@@ -153,6 +174,8 @@ public class MainWindow : Window
                 _tabs
             }
         };
+        Content = _zoom;
+        ApplyScale(Scales[_scaleCombo.SelectedIndex]);
 
         _tabs.Items.Add(new TabItem { Header = "1. Authentication", Content = BuildAuthTab() });
         _tabs.Items.Add(_tab2); _tabs.Items.Add(_tab3);
@@ -173,7 +196,18 @@ public class MainWindow : Window
     {
         var badge = new Border { Background = Orange, CornerRadius = new CornerRadius(12), Padding = new Thickness(12, 4), VerticalAlignment = VerticalAlignment.Center, Child = _langBadgeText };
         var themeLabel = new TextBlock { Text = "Theme:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center };
-        var right = Row(badge, themeLabel, _themeCombo);
+        var eye = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                new PathShape { Data = Geometry.Parse(EyeIcon), Fill = Brushes.White, Width = 22, Height = 22, Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = "Text size:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center },
+                _scaleCombo,
+            }
+        };
+        ToolTip.SetTip(eye, "Make everything bigger to reduce eye strain.\nShortcuts: Ctrl + (bigger), Ctrl - (smaller), Ctrl 0 (reset).");
+        var right = Wrap(badge, eye, themeLabel, _themeCombo);
         right.VerticalAlignment = VerticalAlignment.Center;
         var left = new StackPanel
         {
@@ -396,12 +430,26 @@ public class MainWindow : Window
 
     void Status(string s) => _statusText.Text = s;
 
+    static int NearestScale(double scale) =>
+        Array.IndexOf(Scales, Scales.MinBy(x => Math.Abs(x - scale)));
+
+    /// Zooms the whole window (text, buttons, tables) for readability.
+    void ApplyScale(double scale)
+    {
+        _zoom.LayoutTransform = new ScaleTransform(scale, scale);
+        if (Math.Abs(_settings.TextScale - scale) > 0.001)
+        {
+            _settings.TextScale = scale; _settings.Save();
+            Log.Info($"Text size set to {scale * 100:0}%.");
+        }
+    }
+
     async Task<bool> Message(string title, string text, bool yesNo = false)
     {
         bool result = false;
         var dlg = new Window
         {
-            Title = title, Width = 480, SizeToContent = SizeToContent.Height,
+            Title = title, Width = 480 * _settings.TextScale, SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false
         };
         var ok = new Button { Content = yesNo ? "Yes" : "OK", MinWidth = 70, IsDefault = true };
@@ -410,10 +458,14 @@ public class MainWindow : Window
         no.Click += (_, _) => dlg.Close();
         var buttons = Row(ok, no);
         buttons.HorizontalAlignment = HorizontalAlignment.Right;
-        dlg.Content = new StackPanel
+        dlg.Content = new LayoutTransformControl
         {
-            Margin = new Thickness(16), Spacing = 14,
-            Children = { new SelectableTextBlock { Text = text, TextWrapping = TextWrapping.Wrap }, buttons }
+            LayoutTransform = new ScaleTransform(_settings.TextScale, _settings.TextScale),
+            Child = new StackPanel
+            {
+                Margin = new Thickness(16), Spacing = 14,
+                Children = { new SelectableTextBlock { Text = text, TextWrapping = TextWrapping.Wrap }, buttons }
+            }
         };
         await dlg.ShowDialog(this);
         return result;
