@@ -8,8 +8,27 @@ Desktop tool for the REAP YouTube channels (one channel per language):
 One app for all 12 languages: English, Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, Gujarati, Marathi,
 Punjabi, Assamese, Odia. Light and dark mode. Open source.
 
+**[Download the latest Windows exe](https://github.com/kannan983/reap--youtube-manager/releases/latest)**
+(Windows 10/11, 64-bit, single file, nothing to install)
+
+- [Screenshots](#screenshots)
 - [User guide](#user-guide)
 - [Developer guide](#developer-guide)
+- [License](#license)
+
+## Screenshots
+
+**Sign-in tab** - the header always shows the language, the auth folder and the YouTube channel:
+
+![Authentication tab, light mode](docs/screenshots/auth-light.png)
+
+**Dark mode:**
+
+![Authentication tab, dark mode](docs/screenshots/auth-dark.png)
+
+**Built-in Help tab:**
+
+![Help tab](docs/screenshots/help.png)
 
 ---
 
@@ -149,9 +168,12 @@ The Windows exe can be built on Linux (the command above); no Windows machine ne
 
 ## Release
 
-1. Bump `<Version>` in `ReapManager.csproj`.
-2. `dotnet run -- --selftest`, then `dotnet publish ...` as above.
-3. `gh release create v2.0.1 publish/REAP_YouTube_Manager.exe --title v2.0.1 --notes "..."`
+GitHub Actions (`.github/workflows/build.yml`) builds **only Windows x64** on a Windows runner: self-test, then
+`dotnet publish -r win-x64`. Every push to `windows` uploads the exe as a build artifact.
+
+1. Bump `<Version>` in `ReapManager.csproj` and update `.github/release-notes.md`.
+2. Commit, then tag and push: `git tag v2.0.1 && git push origin v2.0.1`
+3. The workflow creates the GitHub Release with `REAP_YouTube_Manager.exe` and its SHA256 attached.
 
 ## Where things are stored
 
@@ -170,3 +192,9 @@ The Windows exe can be built on Linux (the command above); no Windows machine ne
   key from `api.txt` (same as the Python version).
 - **Logic changes**: change `Core.cs` and add a check to `Core.SelfTest()`.
 - **Never commit** auth folders, `oauth_client.json`, `api.txt`, tokens, `bin/`, `obj/`, `publish/` (see `.gitignore`).
+
+---
+
+# License
+
+[MIT](LICENSE) - free to use, copy, modify and share. Copyright (c) 2026 kannan983.

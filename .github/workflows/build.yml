@@ -1,9 +1,11 @@
 name: Build Windows exe
 
+# Builds ONE target only: Windows x64 (win-x64), single self-contained exe.
 on:
   push:
-    branches: [main]
+    branches: [windows]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -15,31 +17,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-dotnet@v4
         with:
-          python-version: "3.13"
+          dotnet-version: "10.0.x"
 
-      - name: Install dependencies
-        run: pip install -r "REAP English/requirements.txt" pyinstaller
+      - name: Self-test
+        run: dotnet run --project ReapManager -c Release -- --selftest
 
-      - name: Build 12 exes
+      - name: Publish win-x64
+        run: dotnet publish ReapManager -c Release -r win-x64 -o publish
+
+      - name: Show exe and SHA256
         shell: pwsh
         run: |
-          Get-ChildItem -Directory -Filter 'REAP *' | ForEach-Object {
-            $lang = $_.Name -replace '^REAP ', ''
-            pyinstaller --onefile --windowed --noconfirm --name "REAP_${lang}_Manager" --distpath out "$($_.FullName)\gen3_youtube_gem.py"
-            if ($LASTEXITCODE) { exit 1 }
-          }
-          Get-ChildItem out
+          Get-Item publish/REAP_YouTube_Manager.exe | Format-List Name, Length
+          (Get-FileHash publish/REAP_YouTube_Manager.exe -Algorithm SHA256).Hash
 
       - uses: actions/upload-artifact@v4
         with:
-          name: REAP-Managers-exe
-          path: out/*.exe
+          name: REAP_YouTube_Manager-win-x64
+          path: publish/REAP_YouTube_Manager.exe
 
-      - name: Publish release (tags only)
+      - name: Publish GitHub release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: gh release create "${{ github.ref_name }}" (Get-ChildItem out/*.exe).FullName --title "${{ github.ref_name }}" --generate-notes
+        run: |
+          $hash = (Get-FileHash publish/REAP_YouTube_Manager.exe -Algorithm SHA256).Hash
+          Copy-Item .github/release-notes.md notes.md
+          Add-Content notes.md "`n**SHA256** ``REAP_YouTube_Manager.exe``: ``$hash``"
+          gh release create "${{ github.ref_name }}" publish/REAP_YouTube_Manager.exe --title "REAP YouTube Manager ${{ github.ref_name }}" --notes-file notes.md

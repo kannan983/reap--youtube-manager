@@ -95,6 +95,7 @@ public class MainWindow : Window
     readonly CheckBox _verbose = new() { Content = "Show debug details" };
     readonly StringBuilder _logText = new();
     // shell
+    readonly TabControl _tabs = new() { Margin = new Thickness(8, 4, 8, 0) };
     readonly TabItem _tab2 = new() { Header = "2. Rename & Describe" };
     readonly TabItem _tab3 = new() { Header = "3. Excel Export" };
 
@@ -149,20 +150,17 @@ public class MainWindow : Window
             {
                 Dock(BuildHeader(), Avalonia.Controls.Dock.Top),
                 Dock(BuildStatusBar(), Avalonia.Controls.Dock.Bottom),
-                new TabControl
-                {
-                    Margin = new Thickness(8, 4, 8, 0),
-                    Items =
-                    {
-                        new TabItem { Header = "1. Authentication", Content = BuildAuthTab() },
-                        _tab2, _tab3,
-                        new TabItem { Header = "Help", Content = BuildHelpTab() },
-                        new TabItem { Header = "Log", Content = BuildLogTab() },
-                        new TabItem { Header = "About", Content = BuildAboutTab() },
-                    }
-                }
+                _tabs
             }
         };
+
+        _tabs.Items.Add(new TabItem { Header = "1. Authentication", Content = BuildAuthTab() });
+        _tabs.Items.Add(_tab2); _tabs.Items.Add(_tab3);
+        _tabs.Items.Add(new TabItem { Header = "Help", Content = BuildHelpTab() });
+        _tabs.Items.Add(new TabItem { Header = "Log", Content = BuildLogTab() });
+        _tabs.Items.Add(new TabItem { Header = "About", Content = BuildAboutTab() });
+        // for README screenshots: REAP_START_TAB=<index> opens that tab
+        if (int.TryParse(Environment.GetEnvironmentVariable("REAP_START_TAB"), out var startTab)) _tabs.SelectedIndex = startTab;
 
         Log.Written += OnLogWritten;
         RebuildLogView();
