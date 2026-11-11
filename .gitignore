@@ -1,0 +1,25 @@
+# secrets / per-user auth (select this folder in the app at runtime)
+reap_lang/
+api.txt
+oauth_client.json
+token.json
+.env
+*.pem
+
+# build output
+__pycache__/
+build/
+dist/
+out/
+*.spec
+*.exe
+
+# runtime output
+logs/
+Excel sheet/
+
+# AI tools
+.claude/
+.serena/
+.moai/
+memory/

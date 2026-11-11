@@ -1,0 +1,45 @@
+name: Build Windows exe
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r "REAP English/requirements.txt" pyinstaller
+
+      - name: Build 12 exes
+        shell: pwsh
+        run: |
+          Get-ChildItem -Directory -Filter 'REAP *' | ForEach-Object {
+            $lang = $_.Name -replace '^REAP ', ''
+            pyinstaller --onefile --windowed --noconfirm --name "REAP_${lang}_Manager" --distpath out "$($_.FullName)\gen3_youtube_gem.py"
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          Get-ChildItem out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: REAP-Managers-exe
+          path: out/*.exe
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: gh release create "${{ github.ref_name }}" (Get-ChildItem out/*.exe).FullName --title "${{ github.ref_name }}" --generate-notes
