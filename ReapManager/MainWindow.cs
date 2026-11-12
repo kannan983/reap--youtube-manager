@@ -41,7 +41,7 @@ public class RenameRow
     public bool Needs { get; init; }
 }
 
-public class MainWindow : Window
+public partial class MainWindow : Window
 {
     const string OAuthClientFile = "oauth_client.json", ApiKeyFile = "api.txt", PyTokenFile = "token.json";
     const string StoreTokenFile = "Google.Apis.Auth.OAuth2.Responses.TokenResponse-user";
@@ -106,6 +106,7 @@ public class MainWindow : Window
     readonly TabControl _tabs = new() { Margin = new Thickness(8, 4, 8, 0) };
     readonly TabItem _tab2 = new() { Header = "2. Rename & Describe" };
     readonly TabItem _tab3 = new() { Header = "3. Excel Export" };
+    readonly TabItem _tabTest = new() { Header = "Draft Test" };
 
     public MainWindow()
     {
@@ -179,6 +180,8 @@ public class MainWindow : Window
 
         _tabs.Items.Add(new TabItem { Header = "1. Authentication", Content = BuildAuthTab() });
         _tabs.Items.Add(_tab2); _tabs.Items.Add(_tab3);
+        _tabTest.Content = BuildDraftTestTab();
+        _tabs.Items.Add(_tabTest);
         _tabs.Items.Add(new TabItem { Header = "Help", Content = BuildHelpTab() });
         _tabs.Items.Add(new TabItem { Header = "Log", Content = BuildLogTab() });
         _tabs.Items.Add(new TabItem { Header = "About", Content = BuildAboutTab() });
@@ -653,9 +656,10 @@ public class MainWindow : Window
         {
             var req = _ytOAuth!.Channels.List("snippet");
             req.Mine = true;
-            var title = (await req.ExecuteAsync()).Items?.FirstOrDefault()?.Snippet.Title;
-            Log.Info($"Signed-in YouTube channel: {title ?? "(none found)"}");
-            return title;
+            var ch = (await req.ExecuteAsync()).Items?.FirstOrDefault();
+            _channelId = ch?.Id;
+            Log.Info($"Signed-in YouTube channel: {ch?.Snippet.Title ?? "(none found)"} (id {_channelId ?? "-"})");
+            return ch?.Snippet.Title;
         }
         catch (Exception e) { Log.Warn($"Could not read channel name: {e.Message}"); return null; }
     }
@@ -663,10 +667,10 @@ public class MainWindow : Window
     void SetAuthState(bool ok, string message = "")
     {
         _signedIn = ok;
-        if (!ok) _channelTitle = null;
+        if (!ok) _channelTitle = _channelId = null;
         UpdateLanguageDisplay();
         _led.Fill = new SolidColorBrush(ok ? Color.Parse("#14C814") : Color.Parse("#D01414"));
-        _tab2.IsEnabled = _tab3.IsEnabled = ok;
+        _tab2.IsEnabled = _tab3.IsEnabled = _tabTest.IsEnabled = ok;
         if (ok)
         {
             _browserBtn.IsEnabled = _tokenBtn.IsEnabled = false; _abortBtn.IsEnabled = true;

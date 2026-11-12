@@ -78,6 +78,15 @@ public static class Core
         return (2, 0, "", title);
     }
 
+    static readonly Regex VideoIdRx = new(@"(?:v=|youtu\.be/|/video/|/shorts/|^)([A-Za-z0-9_-]{11})(?:[^A-Za-z0-9_-]|$)");
+
+    /// Accepts a bare video ID or a youtu.be / watch?v= / Studio / Shorts link.
+    public static string? ParseVideoId(string input)
+    {
+        var m = VideoIdRx.Match(input.Trim());
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
     public static string CourseCode(string playlistTitle) => playlistTitle.Split('_')[0];
 
     /// Tab 3: build the Excel rows for a playlist.
@@ -160,6 +169,14 @@ public static class Core
             Check(DetectLanguage("/x/REAP Assamees/reap_Assamees/") == "Assamese", "detect Assamees alias");
             Check(DetectLanguage("/x/auth") == null, "detect nothing");
             Check(LanguageCode("Odia") == "or", "language code");
+            Check(ParseVideoId("A2fdlBpPYxc") == "A2fdlBpPYxc", "video id bare");
+            Check(ParseVideoId("https://youtu.be/A2fdlBpPYxc") == "A2fdlBpPYxc", "video id youtu.be");
+            Check(ParseVideoId("https://www.youtube.com/watch?v=A2fdlBpPYxc&t=3") == "A2fdlBpPYxc", "video id watch");
+            Check(ParseVideoId("https://studio.youtube.com/video/A2fdlBpPYxc/edit") == "A2fdlBpPYxc", "video id studio");
+            Check(ParseVideoId("hello world") == null, "video id invalid");
+            var json = Google.Apis.Json.NewtonsoftJsonSerializer.Instance.Serialize(
+                new Google.Apis.YouTube.v3.Data.VideoStatus { PrivacyStatus = "unlisted", SelfDeclaredMadeForKids = false });
+            Check(json.Contains("\"selfDeclaredMadeForKids\":false") && json.Contains("\"privacyStatus\":\"unlisted\""), "madeForKids=false is sent: " + json);
             return 0;
         }
         catch (Exception e) { Console.WriteLine(e.Message); return 1; }
