@@ -6,14 +6,7 @@
 2. Double-click it. If Windows says "Windows protected your PC": **More info** > **Run anyway** (the exe is not code-signed).
 3. Open the **Help** tab in the app, or read the [User guide](https://github.com/kannan983/reap--youtube-manager#user-guide).
 
-## New in v2.1.0
-
-- **Draft Test** tab: test whether a YouTube Studio *Draft* can be made **Unlisted** (not made for kids) by the app,
-  without the 4 Studio steps. Read one video (1 unit), make it Unlisted (50 units), then **Copy test report** and send it.
-- **List recent uploads**: shows whether Studio drafts are visible to the API (about 3 units).
-- The signed-in channel ID is logged, and the test warns if a video belongs to a different channel.
-
-## Included from v2.0.0
+## What's in v2.0.0
 
 - Rewritten in C# (.NET 10 + Avalonia): one app for all 12 language channels instead of 12 separate exes.
 - One auth folder per language, remembered; picking a language loads its folder and signs in with the saved token.

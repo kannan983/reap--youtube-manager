@@ -108,18 +108,6 @@ folders with Browse.
 3. The language code comes from the end of the playlist title (`NARQ30056_ta` -> `ta`). If it does not match
    the selected language you get a warning first.
 
-## Draft Test (finish a Studio draft as Unlisted)
-
-Tests whether the app can turn a YouTube Studio **Draft** into **Unlisted** without the 4 Studio steps:
-
-1. Sign in to the channel (tab 1). In YouTube Studio > Content, copy the link of **one** draft video.
-2. **Draft Test** tab: paste the link > **1. Read video** (1 unit, changes nothing).
-3. **2. Make Unlisted** > confirm (50 units, changes only this video).
-4. Refresh YouTube Studio > Content: does it show **Unlisted** or still **Draft**?
-5. **Copy test report**, paste it in a message and add what Studio showed.
-
-**List recent uploads** (about 3 units) shows the last 50 uploads with their privacy, to check whether drafts are visible to the API.
-
 ## Text size (eye icon) and theme
 
 - **Text size** (eye icon in the header, next to the language badge): 100% to 200%. Makes everything bigger
